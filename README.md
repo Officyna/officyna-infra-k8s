@@ -49,12 +49,16 @@ terraform destroy
 
 ## CI/CD
 
-O workflow em [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml)
-executa:
+Um único workflow, [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml),
+cuida de tudo:
 
 - **Pull Request para `main`**: `terraform fmt -check`, `terraform validate` e
-  `terraform plan` (comentando o plano no PR).
-- **Push em `main`**: `terraform apply -auto-approve`.
+  `terraform plan` (job `plan`).
+- **Push em `main`**: `terraform apply -auto-approve` (job `apply`, infraestrutura fica no ar).
+- **Manual** (aba *Actions* → *Terraform CI/CD (EKS)* → *Run workflow*):
+  escolha `action: apply` para reaplicar, ou `action: destroy` (digitando
+  `destroy` no campo de confirmação) para desligar o cluster quando não
+  estiver em uso e evitar custo na AWS.
 
 ### Secrets necessários no repositório
 
