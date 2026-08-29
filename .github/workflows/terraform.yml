@@ -25,9 +25,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  AWS_REGION: us-east-1
-
 jobs:
   plan:
     name: Terraform Plan
@@ -45,7 +42,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -61,8 +58,20 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+      - name: Ler rede do banco (SSM Parameter Store)
+        id: network
+        run: |
+          VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
+          SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+
+          echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
+          echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Plan
-        run: terraform plan -no-color -input=false
+        run: |
+          terraform plan -no-color -input=false \
+            -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
 
   apply:
     name: Terraform Apply
@@ -80,7 +89,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -90,8 +99,20 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
+      - name: Ler rede do banco (SSM Parameter Store)
+        id: network
+        run: |
+          VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
+          SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+
+          echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
+          echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Apply
-        run: terraform apply -auto-approve -input=false
+        run: |
+          terraform apply -auto-approve -input=false \
+            -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
 
   destroy:
     name: Terraform Destroy (manual)
@@ -109,7 +130,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -119,5 +140,17 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
+      - name: Ler rede do banco (SSM Parameter Store)
+        id: network
+        run: |
+          VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
+          SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+
+          echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
+          echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Destroy
-        run: terraform destroy -auto-approve -input=false
+        run: |
+          terraform destroy -auto-approve -input=false \
+            -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
