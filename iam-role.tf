@@ -70,3 +70,21 @@ resource "aws_eks_access_policy_association" "access_entry_association" {
     type = "cluster"
   }
 }
+
+# Access entry para o usuário usado pelo GitHub Actions (roda kubectl no
+# deploy-app/destroy-app do officyna-service)
+resource "aws_eks_access_entry" "access_entry_github_actions" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  principal_arn = data.aws_iam_user.github_actions_user.arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "access_entry_association_github_actions" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+  principal_arn = data.aws_iam_user.github_actions_user.arn
+
+  access_scope {
+    type = "cluster"
+  }
+}
