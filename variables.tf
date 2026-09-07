@@ -37,3 +37,9 @@ variable "subnet_ids" {
   type        = list(string)
   default     = []
 }
+
+variable "newrelic_license_key" {
+  description = "License key do New Relic"
+  type        = string
+  sensitive   = true
+}
