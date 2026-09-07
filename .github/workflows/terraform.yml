@@ -119,6 +119,8 @@ jobs:
       # ============================================================
 
       - name: Criar EKS e Node Group - Terraform Apply
+        env:
+          TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
         run: |
           terraform apply \
             -auto-approve \
