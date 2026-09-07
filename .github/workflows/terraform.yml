@@ -35,6 +35,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
@@ -70,6 +71,8 @@ jobs:
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
 
       - name: Terraform Plan
+        env:
+          TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
         run: |
           terraform plan -no-color -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
@@ -82,6 +85,7 @@ jobs:
     environment: production
     permissions:
       contents: read
+
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
@@ -110,9 +114,31 @@ jobs:
           echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
 
-      - name: Terraform Apply
+      # ============================================================
+      # ETAPA 1 - Criar EKS e Node Group
+      # ============================================================
+
+      - name: Criar EKS e Node Group - Terraform Apply
         run: |
-          terraform apply -auto-approve -input=false \
+          terraform apply \
+            -auto-approve \
+            -input=false \
+            -target=aws_eks_cluster.cluster \
+            -target=aws_eks_node_group.node_group \
+            -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+
+      # ============================================================
+      # ETAPA 2 - Instalar New Relic e finalizar Terraform
+      # ============================================================
+
+      - name: Instalar New Relic Kubernetes Monitoring - Terraform Apply
+        env:
+          TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+        run: |
+          terraform apply \
+            -auto-approve \
+            -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
             -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
 
@@ -123,6 +149,7 @@ jobs:
     environment: production
     permissions:
       contents: read
+
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
@@ -152,6 +179,8 @@ jobs:
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
 
       - name: Terraform Destroy
+        env:
+          TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
         run: |
           terraform destroy -auto-approve -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
