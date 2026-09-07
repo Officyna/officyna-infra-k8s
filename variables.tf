@@ -32,9 +32,20 @@ variable "vpc_id" {
   default     = "vpc-01198adba51551838"
 }
 
-
 variable "subnet_ids" {
   description = "Lista de IDs das Subnets"
   type        = list(string)
   default     = ["subnet-094a4756371abb5f2", "subnet-0a04000aa0846c777"]
+}
+
+variable "newrelic_license_key" {
+  description = "License key do New Relic"
+  type        = string
+  sensitive   = true
+}
+
+variable "newrelic_cluster_name" {
+  description = "Nome do cluster no New Relic"
+  type        = string
+  default     = "officyna-eks"
 }
