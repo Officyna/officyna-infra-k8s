@@ -23,6 +23,22 @@ resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
   role       = aws_iam_role.cluster.name
 }
 
+resource "aws_iam_role_policy" "cluster_describe_instances" {
+  name = "eks-cluster-describe-instances"
+  role = aws_iam_role.cluster.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeInstances"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # IAM role para Node
 resource "aws_iam_role" "node" {
   name = "eks-node-group-role"
