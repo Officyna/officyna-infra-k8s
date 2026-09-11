@@ -54,6 +54,22 @@ resource "aws_iam_role_policy_attachment" "node-AmazonEC2ContainerRegistryReadOn
   role       = aws_iam_role.node.name
 }
 
+resource "aws_iam_role_policy" "node_describe_instances" {
+  name = "eks-node-describe-instances"
+  role = aws_iam_role.node.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeInstances"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 #Access entry
 resource "aws_eks_access_entry" "access_entry" {
   cluster_name  = aws_eks_cluster.cluster.name
