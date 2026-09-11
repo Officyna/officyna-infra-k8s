@@ -6,6 +6,9 @@ resource "aws_eks_node_group" "node_group" {
   disk_size       = 50
   instance_types  = [var.instance_type]
 
+  ami_type        = "AL2023_x86_64_STANDARD"
+  release_version = "1.35.7-20260903"
+
   scaling_config {
     desired_size = 1
     max_size     = 2
