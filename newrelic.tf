@@ -42,6 +42,8 @@ resource "helm_release" "newrelic_kubernetes" {
   }
 
   depends_on = [
-    aws_eks_node_group.node_group
+    aws_eks_node_group.node_group,
+    aws_eks_access_entry.access_entry_github_actions,
+    aws_eks_access_policy_association.access_entry_association_github_actions
   ]
 }
