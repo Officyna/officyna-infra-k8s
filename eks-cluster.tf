@@ -11,4 +11,9 @@ resource "aws_eks_cluster" "cluster" {
   vpc_config {
     subnet_ids = length(var.subnet_ids) > 0 ? var.subnet_ids : aws_subnet.subnet_public[*].id
   }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy,
+    aws_iam_role_policy.cluster_describe_instances,
+  ]
 }
