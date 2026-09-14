@@ -1,0 +1,28 @@
+resource "aws_eks_node_group" "node_group" {
+  cluster_name    = aws_eks_cluster.cluster.name
+  node_group_name = "nodeg-${var.project_name}"
+  node_role_arn   = aws_iam_role.node.arn
+  subnet_ids      = length(var.subnet_ids) > 0 ? var.subnet_ids : aws_subnet.subnet_public[*].id
+  disk_size       = 50
+  instance_types  = [var.instance_type]
+
+  ami_type        = "AL2023_x86_64_STANDARD"
+  release_version = "1.35.7-20260903"
+
+  scaling_config {
+    desired_size = 1
+    max_size     = 2
+    min_size     = 1
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node-AmazonEKSWorkerNodePolicy,
+    aws_iam_role_policy_attachment.node-AmazonEKS_CNI_Policy,
+    aws_iam_role_policy_attachment.node-AmazonEC2ContainerRegistryReadOnly,
+    aws_iam_role_policy.node_describe_instances,
+  ]
+}
