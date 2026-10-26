@@ -101,6 +101,11 @@ resource "aws_eks_access_policy_association" "access_entry_association" {
   access_scope {
     type = "cluster"
   }
+
+  # Sem referência de atributo entre os dois recursos, o Terraform não sabe que o access entry
+  # precisa existir primeiro — sem isso, às vezes tenta associar a política em paralelo com a
+  # criação do entry e falha com ResourceNotFoundException.
+  depends_on = [aws_eks_access_entry.access_entry]
 }
 
 # Access entry para o usuário usado pelo GitHub Actions (roda kubectl no
@@ -119,4 +124,6 @@ resource "aws_eks_access_policy_association" "access_entry_association_github_ac
   access_scope {
     type = "cluster"
   }
+
+  depends_on = [aws_eks_access_entry.access_entry_github_actions]
 }
