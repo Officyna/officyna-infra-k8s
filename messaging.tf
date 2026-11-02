@@ -64,7 +64,7 @@ locals {
       publica    = "os-service"
       consome    = "production-service + billing-service"
       dlq        = "-"
-      gerenciado = false
+      gerenciado = true
     },
     {
       nome       = "topicAprovacao"
@@ -80,7 +80,7 @@ locals {
       publica    = "billing-service"
       consome    = "os-service"
       dlq        = "-"
-      gerenciado = false
+      gerenciado = true
     },
   ]
 
@@ -175,6 +175,33 @@ resource "aws_sns_topic_subscription" "topic_aprovacao_os_service_sub" {
   topic_arn = aws_sns_topic.topic_aprovacao.arn
   protocol  = "sqs"
   endpoint  = aws_sqs_queue.topic_aprovacao_os_service.arn
+}
+
+# ============================================================
+# SNS eventServiceOrderRecused e topicRejeicao
+#
+# Fluxo de recusa/estorno (fase futura da saga) — nenhum serviço publica
+# ou consome ainda, então só o tópico é criado aqui. Quando o código do
+# consumer existir, segue o mesmo padrão do topicAprovacao acima: fila
+# SQS com o nome que o consumer espera + aws_sns_topic_subscription.
+# ============================================================
+
+resource "aws_sns_topic" "event_service_order_recused" {
+  name = "eventServiceOrderRecused"
+
+  tags = {
+    Name    = "eventServiceOrderRecused"
+    Project = "officyna"
+  }
+}
+
+resource "aws_sns_topic" "topic_rejeicao" {
+  name = "topicRejeicao"
+
+  tags = {
+    Name    = "topicRejeicao"
+    Project = "officyna"
+  }
 }
 
 output "saga_map" {
