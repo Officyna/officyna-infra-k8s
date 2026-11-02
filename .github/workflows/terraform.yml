@@ -144,6 +144,45 @@ jobs:
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
             -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
 
+      # ============================================================
+      # ETAPA 3 - Logar o mapa de mensageria da saga (messaging.tf)
+      # ============================================================
+
+      - name: Logar status das filas/tópicos da saga
+        run: |
+          echo "## 📬 Mapa de mensageria da saga" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Evento/Tópico | Tipo | Publica | Consome | DLQ | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          terraform output -json saga_map | jq -c '.[]' | while read -r item; do
+            nome=$(echo "$item" | jq -r '.nome')
+            tipo=$(echo "$item" | jq -r '.tipo')
+            publica=$(echo "$item" | jq -r '.publica')
+            consome=$(echo "$item" | jq -r '.consome')
+            dlq=$(echo "$item" | jq -r '.dlq')
+            gerenciado=$(echo "$item" | jq -r '.gerenciado')
+
+            if [ "$gerenciado" != "true" ]; then
+              status="⏸️ não criado (fase futura da saga)"
+            elif [ "$tipo" = "SNS" ]; then
+              if aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${nome}')]" --output text | grep -q .; then
+                status="✅ existe"
+              else
+                status="❌ não encontrado"
+              fi
+            else
+              if aws sqs get-queue-url --queue-name "$nome" >/dev/null 2>&1; then
+                status="✅ existe"
+              else
+                status="❌ não encontrado"
+              fi
+            fi
+
+            echo "| $nome | $tipo | $publica | $consome | $dlq | $status |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$nome ($tipo): $status"
+          done
+
   destroy:
     name: Terraform Destroy (manual)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy' && github.event.inputs.confirm == 'destroy'
