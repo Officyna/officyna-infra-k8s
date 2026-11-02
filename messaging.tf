@@ -137,7 +137,8 @@ resource "aws_sqs_queue" "queue" {
 # ============================================================
 
 resource "aws_sns_topic" "topic_aprovacao" {
-  name = "topicAprovacao"
+  name              = "topicAprovacao"
+  kms_master_key_id = "alias/aws/sns"
 
   tags = {
     Name    = "topicAprovacao"
@@ -187,7 +188,8 @@ resource "aws_sns_topic_subscription" "topic_aprovacao_os_service_sub" {
 # ============================================================
 
 resource "aws_sns_topic" "event_service_order_recused" {
-  name = "eventServiceOrderRecused"
+  name              = "eventServiceOrderRecused"
+  kms_master_key_id = "alias/aws/sns"
 
   tags = {
     Name    = "eventServiceOrderRecused"
@@ -196,7 +198,8 @@ resource "aws_sns_topic" "event_service_order_recused" {
 }
 
 resource "aws_sns_topic" "topic_rejeicao" {
-  name = "topicRejeicao"
+  name              = "topicRejeicao"
+  kms_master_key_id = "alias/aws/sns"
 
   tags = {
     Name    = "topicRejeicao"
