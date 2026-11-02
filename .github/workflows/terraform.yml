@@ -150,6 +150,7 @@ jobs:
 
       - name: Logar status das filas/tópicos da saga
         run: |
+          set -euo pipefail
           echo "## 📬 Mapa de mensageria da saga" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Evento/Tópico | Tipo | Publica | Consome | DLQ | Status |" >> "$GITHUB_STEP_SUMMARY"
