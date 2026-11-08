@@ -179,12 +179,15 @@ resource "aws_sns_topic_subscription" "topic_aprovacao_os_service_sub" {
 }
 
 # ============================================================
-# SNS eventServiceOrderRecused e topicRejeicao
+# SNS eventServiceOrderRecused + fila assinante do billing-service
 #
-# Fluxo de recusa/estorno (fase futura da saga) — nenhum serviço publica
-# ou consome ainda, então só o tópico é criado aqui. Quando o código do
-# consumer existir, segue o mesmo padrão do topicAprovacao acima: fila
-# SQS com o nome que o consumer espera + aws_sns_topic_subscription.
+# billing-service já consome (ServiceOrderRecusedEventListener, dispara
+# estorno no Mercado Pago quando a OS é recusada/cancelada com pagamento
+# já aprovado). os-service ainda não publica — quando publicar, só
+# precisa dar CreateTopic/Publish nesse mesmo tópico, nada a mudar aqui.
+# Mesmo padrão fan-out do topicAprovacao: fila com o nome exato que o
+# consumer espera (aws.sqs.service-order-recused-queue), assinando o
+# tópico.
 # ============================================================
 
 resource "aws_sns_topic" "event_service_order_recused" {
@@ -196,6 +199,47 @@ resource "aws_sns_topic" "event_service_order_recused" {
     Project = "officyna"
   }
 }
+
+resource "aws_sqs_queue" "event_service_order_recused_billing_service" {
+  name = "eventServiceOrderRecused"
+
+  tags = {
+    Name    = "eventServiceOrderRecused"
+    Project = "officyna"
+  }
+}
+
+resource "aws_sqs_queue_policy" "event_service_order_recused_billing_service_policy" {
+  queue_url = aws_sqs_queue.event_service_order_recused_billing_service.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "sns.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.event_service_order_recused_billing_service.arn
+      Condition = {
+        ArnEquals = { "aws:SourceArn" = aws_sns_topic.event_service_order_recused.arn }
+      }
+    }]
+  })
+}
+
+resource "aws_sns_topic_subscription" "event_service_order_recused_billing_service_sub" {
+  topic_arn = aws_sns_topic.event_service_order_recused.arn
+  protocol  = "sqs"
+  endpoint  = aws_sqs_queue.event_service_order_recused_billing_service.arn
+}
+
+# ============================================================
+# SNS topicRejeicao
+#
+# billing-service publica (RejectionTopicPublisher, quando o Mercado
+# Pago recusa um pagamento) — ainda sem consumer (os-service trataria
+# isso pra cancelar a OS). Só o tópico é criado aqui; quando o consumer
+# existir, segue o mesmo padrão de fila assinante acima.
+# ============================================================
 
 resource "aws_sns_topic" "topic_rejeicao" {
   name              = "topicRejeicao"
