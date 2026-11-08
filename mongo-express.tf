@@ -1,34 +1,49 @@
 locals {
   # So sobe o mongo-express quando as 3 variaveis (endpoint + senha do docdb + senha do basic auth)
   # estiverem preenchidas. Sem elas, fica tudo desligado (default = "" nas variaveis).
-  deploy_mongo_express = var.docdb_endpoint != "" && var.docdb_password != "" && var.mongo_express_basicauth_password != ""
+  # nonsensitive() aqui so revela um booleano (se a senha foi preenchida ou nao), nunca o
+  # valor em si - sem isso o for_each abaixo falha com "Invalid for_each argument" porque o
+  # Terraform marca qualquer condicional derivado de uma sensitive var como sensitive tambem,
+  # mesmo so comparando com "".
+  deploy_mongo_express = nonsensitive(var.docdb_endpoint != "" && var.docdb_password != "" && var.mongo_express_basicauth_password != "")
 
-  mongo_express_mongo_url = "mongodb://officynasoatdbuser:${var.docdb_password}@${var.docdb_endpoint}:27017/officyna?tls=true&tlsAllowInvalidCertificates=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false"
+  # O mongo-express 1.0.2 nao enumera corretamente os outros bancos do cluster (o
+  # listDatabases que ele roda internamente fica restrito ao banco que esta na própria
+  # connection string - confirmado com um mongosh direto, que ve todos os bancos
+  # normalmente). Pra contornar isso sem esperar um fix/upgrade da imagem, sobe uma
+  # instancia de mongo-express por banco, cada uma ja conectada direto nele.
+  mongo_express_databases = local.deploy_mongo_express ? toset(["officyna", "officyna_supply", "officyna_labor", "officyna_snapshot", "officyna-users"]) : toset([])
+
+  mongo_express_k8s_name = { for db in local.mongo_express_databases : db => "mongo-express-${replace(db, "_", "-")}" }
+
+  mongo_express_mongo_url = { for db in local.mongo_express_databases :
+    db => "mongodb://officynasoatdbuser:${var.docdb_password}@${var.docdb_endpoint}:27017/${db}?tls=true&tlsAllowInvalidCertificates=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false"
+  }
 }
 
 resource "kubernetes_secret" "mongo_express" {
-  count = local.deploy_mongo_express ? 1 : 0
+  for_each = local.mongo_express_databases
 
   metadata {
-    name      = "mongo-express-secret"
+    name      = "${local.mongo_express_k8s_name[each.key]}-secret"
     namespace = "default"
   }
 
   data = {
-    mongodb-url        = local.mongo_express_mongo_url
+    mongodb-url        = local.mongo_express_mongo_url[each.key]
     basicauth-username = "officyna"
     basicauth-password = var.mongo_express_basicauth_password
   }
 }
 
 resource "kubernetes_deployment" "mongo_express" {
-  count = local.deploy_mongo_express ? 1 : 0
+  for_each = local.mongo_express_databases
 
   metadata {
-    name      = "mongo-express"
+    name      = local.mongo_express_k8s_name[each.key]
     namespace = "default"
     labels = {
-      app = "mongo-express"
+      app = local.mongo_express_k8s_name[each.key]
     }
   }
 
@@ -42,14 +57,14 @@ resource "kubernetes_deployment" "mongo_express" {
 
     selector {
       match_labels = {
-        app = "mongo-express"
+        app = local.mongo_express_k8s_name[each.key]
       }
     }
 
     template {
       metadata {
         labels = {
-          app = "mongo-express"
+          app = local.mongo_express_k8s_name[each.key]
         }
       }
 
@@ -66,7 +81,7 @@ resource "kubernetes_deployment" "mongo_express" {
             name = "ME_CONFIG_MONGODB_URL"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.mongo_express[0].metadata[0].name
+                name = kubernetes_secret.mongo_express[each.key].metadata[0].name
                 key  = "mongodb-url"
               }
             }
@@ -76,7 +91,7 @@ resource "kubernetes_deployment" "mongo_express" {
             name = "ME_CONFIG_BASICAUTH_USERNAME"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.mongo_express[0].metadata[0].name
+                name = kubernetes_secret.mongo_express[each.key].metadata[0].name
                 key  = "basicauth-username"
               }
             }
@@ -86,7 +101,7 @@ resource "kubernetes_deployment" "mongo_express" {
             name = "ME_CONFIG_BASICAUTH_PASSWORD"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.mongo_express[0].metadata[0].name
+                name = kubernetes_secret.mongo_express[each.key].metadata[0].name
                 key  = "basicauth-password"
               }
             }
@@ -125,16 +140,16 @@ resource "kubernetes_deployment" "mongo_express" {
 }
 
 resource "kubernetes_service" "mongo_express" {
-  count = local.deploy_mongo_express ? 1 : 0
+  for_each = local.mongo_express_databases
 
   metadata {
-    name      = "mongo-express"
+    name      = local.mongo_express_k8s_name[each.key]
     namespace = "default"
   }
 
   spec {
     selector = {
-      app = "mongo-express"
+      app = local.mongo_express_k8s_name[each.key]
     }
 
     port {

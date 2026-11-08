@@ -228,9 +228,12 @@ jobs:
             fi
           }
 
-          import_if_needed 'kubernetes_secret.mongo_express[0]' secret mongo-express-secret
-          import_if_needed 'kubernetes_deployment.mongo_express[0]' deployment mongo-express
-          import_if_needed 'kubernetes_service.mongo_express[0]' service mongo-express
+          for db in officyna officyna_supply officyna_labor officyna_snapshot officyna-users; do
+            k8s_name="mongo-express-${db//_/-}"
+            import_if_needed "kubernetes_secret.mongo_express[\"$db\"]" secret "${k8s_name}-secret"
+            import_if_needed "kubernetes_deployment.mongo_express[\"$db\"]" deployment "$k8s_name"
+            import_if_needed "kubernetes_service.mongo_express[\"$db\"]" service "$k8s_name"
+          done
 
       # ============================================================
       # ETAPA 2 - Instalar New Relic e finalizar Terraform
@@ -248,6 +251,53 @@ jobs:
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
             -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
             -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}"
+
+      # ============================================================
+      # ETAPA 2.5 - Mostrar as URLs de cada mongo-express (um por banco)
+      #
+      # O LoadBalancer da AWS demora alguns segundos pra ganhar hostname depois
+      # do apply, por isso espera em rodadas em vez de checar só uma vez.
+      # ============================================================
+
+      - name: Mostrar URLs do mongo-express
+        run: |
+          set -euo pipefail
+          echo "## 🗄️ Mongo Express (um por banco)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Banco | URL |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          databases="officyna officyna_supply officyna_labor officyna_snapshot officyna-users"
+          pendentes="$databases"
+
+          for round in $(seq 1 18); do
+            ainda_pendentes=""
+            for db in $pendentes; do
+              svc="mongo-express-${db//_/-}"
+
+              if ! kubectl get service "$svc" -n default >/dev/null 2>&1; then
+                continue
+              fi
+
+              hostname=$(kubectl get service "$svc" -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+              if [ -n "$hostname" ]; then
+                echo "| $db | http://$hostname |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                ainda_pendentes="$ainda_pendentes $db"
+              fi
+            done
+
+            pendentes="$ainda_pendentes"
+            [ -z "$pendentes" ] && break
+            sleep 10
+          done
+
+          for db in $pendentes; do
+            svc="mongo-express-${db//_/-}"
+            if kubectl get service "$svc" -n default >/dev/null 2>&1; then
+              echo "| $db | ⏳ LoadBalancer ainda provisionando, verifique com \`kubectl get svc $svc -n default\` |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       # ============================================================
       # ETAPA 3 - Logar o mapa de mensageria da saga (messaging.tf)
