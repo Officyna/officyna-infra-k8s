@@ -66,17 +66,22 @@ jobs:
         run: |
           VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
           SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+          DOCDB_ENDPOINT=$(aws ssm get-parameter --name "/officyna/db/endpoint" --query "Parameter.Value" --output text 2>/dev/null || true)
 
           echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+          echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       - name: Terraform Plan
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
         run: |
           terraform plan -no-color -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+            -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}"
 
   apply:
     name: Terraform Apply
@@ -110,9 +115,11 @@ jobs:
         run: |
           VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
           SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+          DOCDB_ENDPOINT=$(aws ssm get-parameter --name "/officyna/db/endpoint" --query "Parameter.Value" --output text 2>/dev/null || true)
 
           echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+          echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       # ============================================================
       # ETAPA 1 - Criar EKS e Node Group
@@ -186,12 +193,15 @@ jobs:
       - name: Instalar New Relic Kubernetes Monitoring - Terraform Apply
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
         run: |
           terraform apply \
             -auto-approve \
             -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+            -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}"
 
       # ============================================================
       # ETAPA 3 - Logar o mapa de mensageria da saga (messaging.tf)
@@ -265,14 +275,19 @@ jobs:
         run: |
           VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
           SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+          DOCDB_ENDPOINT=$(aws ssm get-parameter --name "/officyna/db/endpoint" --query "Parameter.Value" --output text 2>/dev/null || true)
 
           echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+          echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       - name: Terraform Destroy
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
         run: |
           terraform destroy -auto-approve -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+            -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}"
