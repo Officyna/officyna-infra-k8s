@@ -187,6 +187,52 @@ jobs:
           import_if_needed "aws_sqs_queue.event_service_order_recused_billing_service" "eventServiceOrderRecused"
 
       # ============================================================
+      # ETAPA 1.6 - Importar recursos do mongo-express ja criados no cluster
+      #
+      # Se um apply anterior for cancelado no meio (ex: enquanto o
+      # kubernetes_deployment fica esperando o rollout ficar saudavel), os
+      # objetos podem ja existir de verdade no cluster sem estar no state do
+      # Terraform. Sem isso o apply seguinte tenta criar de novo e falha com
+      # "already exists". Se os recursos ainda nao existirem (primeira vez
+      # ou variaveis vazias), o kubectl get falha e o Terraform cria normal.
+      # ============================================================
+
+      - name: Importar recursos do mongo-express existentes (evita already exists)
+        env:
+          TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name eks-officyna-service --region "${{ secrets.AWS_REGION }}"
+
+          import_if_needed() {
+            local addr="$1"
+            local kind="$2"
+            local name="$3"
+
+            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
+              echo "$addr já está no state, pulando."
+              return
+            fi
+
+            if kubectl get "$kind" "$name" -n default >/dev/null 2>&1; then
+              echo "$kind/$name já existe no cluster mas não no state — importando $addr"
+              terraform import -input=false \
+                -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+                -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+                -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}" \
+                "$addr" "default/$name"
+            else
+              echo "$kind/$name ainda não existe, Terraform cria normalmente."
+            fi
+          }
+
+          import_if_needed 'kubernetes_secret.mongo_express[0]' secret mongo-express-secret
+          import_if_needed 'kubernetes_deployment.mongo_express[0]' deployment mongo-express
+          import_if_needed 'kubernetes_service.mongo_express[0]' service mongo-express
+
+      # ============================================================
       # ETAPA 2 - Instalar New Relic e finalizar Terraform
       # ============================================================
 
