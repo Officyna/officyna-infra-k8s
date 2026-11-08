@@ -32,6 +32,11 @@ resource "kubernetes_deployment" "mongo_express" {
     }
   }
 
+  # Nao trava o apply esperando o rollout ficar saudavel - como e uma ferramenta de teste que
+  # sobe/derruba com frequencia, preferimos um apply rapido e debugar via kubectl se o pod nao
+  # subir, em vez do CI ficar preso minutos esperando um timeout.
+  wait_for_rollout = false
+
   spec {
     replicas = 1
 
@@ -90,6 +95,26 @@ resource "kubernetes_deployment" "mongo_express" {
           env {
             name  = "ME_CONFIG_MONGODB_ENABLE_ADMIN"
             value = "false"
+          }
+
+          # mongo-express manda essa flag pro driver do Mongo separado da URL de conexao - sem
+          # isso ela vem false por padrao e entra em conflito com o "tls=true" que ja esta na
+          # connection string (erro "All values of tls/ssl must be the same").
+          env {
+            name  = "ME_CONFIG_MONGODB_TLS"
+            value = "true"
+          }
+
+          env {
+            name  = "ME_CONFIG_MONGODB_TLS_ALLOW_CERTS"
+            value = "true"
+          }
+
+          # Sem isso o basic auth nao fica habilitado de verdade (algumas versoes do
+          # mongo-express exigem essa flag alem do usuario/senha).
+          env {
+            name  = "ME_CONFIG_BASICAUTH_ENABLED"
+            value = "true"
           }
         }
       }
