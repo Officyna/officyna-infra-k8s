@@ -34,6 +34,12 @@ resource "kubernetes_secret" "mongo_express" {
     basicauth-username = "officyna"
     basicauth-password = var.mongo_express_basicauth_password
   }
+
+  depends_on = [
+    aws_eks_node_group.node_group,
+    aws_eks_access_entry.access_entry_github_actions,
+    aws_eks_access_policy_association.access_entry_association_github_actions
+  ]
 }
 
 resource "kubernetes_deployment" "mongo_express" {
@@ -137,6 +143,12 @@ resource "kubernetes_deployment" "mongo_express" {
       }
     }
   }
+
+  depends_on = [
+    aws_eks_node_group.node_group,
+    aws_eks_access_entry.access_entry_github_actions,
+    aws_eks_access_policy_association.access_entry_association_github_actions
+  ]
 }
 
 resource "kubernetes_service" "mongo_express" {
@@ -159,4 +171,10 @@ resource "kubernetes_service" "mongo_express" {
 
     type = "LoadBalancer"
   }
+
+  depends_on = [
+    aws_eks_node_group.node_group,
+    aws_eks_access_entry.access_entry_github_actions,
+    aws_eks_access_policy_association.access_entry_association_github_actions
+  ]
 }

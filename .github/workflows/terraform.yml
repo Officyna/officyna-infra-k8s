@@ -377,6 +377,10 @@ jobs:
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
           echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
+      - name: Configurar kubeconfig do cluster EKS
+        run: |
+          aws eks update-kubeconfig --name eks-officyna-service --region "${{ vars.AWS_REGION }}" || true
+
       - name: Terraform Destroy
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
