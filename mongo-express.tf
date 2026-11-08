@@ -1,7 +1,11 @@
 locals {
   # So sobe o mongo-express quando as 3 variaveis (endpoint + senha do docdb + senha do basic auth)
   # estiverem preenchidas. Sem elas, fica tudo desligado (default = "" nas variaveis).
-  deploy_mongo_express = var.docdb_endpoint != "" && var.docdb_password != "" && var.mongo_express_basicauth_password != ""
+  # nonsensitive() aqui so revela um booleano (se a senha foi preenchida ou nao), nunca o
+  # valor em si - sem isso o for_each abaixo falha com "Invalid for_each argument" porque o
+  # Terraform marca qualquer condicional derivado de uma sensitive var como sensitive tambem,
+  # mesmo so comparando com "".
+  deploy_mongo_express = nonsensitive(var.docdb_endpoint != "" && var.docdb_password != "" && var.mongo_express_basicauth_password != "")
 
   # O mongo-express 1.0.2 nao enumera corretamente os outros bancos do cluster (o
   # listDatabases que ele roda internamente fica restrito ao banco que esta na própria
