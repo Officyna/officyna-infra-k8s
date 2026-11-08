@@ -99,21 +99,23 @@ resource "kubernetes_deployment" "mongo_express" {
 
           # mongo-express manda essa flag pro driver do Mongo separado da URL de conexao - sem
           # isso ela vem false por padrao e entra em conflito com o "tls=true" que ja esta na
-          # connection string (erro "All values of tls/ssl must be the same").
+          # connection string (erro "All values of tls/ssl must be the same"). A imagem usada
+          # e a release 1.0.2, que usa os nomes antigos (ME_CONFIG_MONGODB_SSL*), nao os novos
+          # ME_CONFIG_MONGODB_TLS* que so existem em versao mais recente/nao lancada.
           env {
-            name  = "ME_CONFIG_MONGODB_TLS"
+            name  = "ME_CONFIG_MONGODB_SSL"
             value = "true"
           }
 
           env {
-            name  = "ME_CONFIG_MONGODB_TLS_ALLOW_CERTS"
-            value = "true"
+            name  = "ME_CONFIG_MONGODB_SSLVALIDATE"
+            value = "false"
           }
 
-          # Sem isso o basic auth nao fica habilitado de verdade (algumas versoes do
-          # mongo-express exigem essa flag alem do usuario/senha).
+          # Sem isso o basic auth fica DESABILITADO por padrao (false) - na release 1.0.2 a
+          # flag se chama ME_CONFIG_BASICAUTH, sem o sufixo _ENABLED.
           env {
-            name  = "ME_CONFIG_BASICAUTH_ENABLED"
+            name  = "ME_CONFIG_BASICAUTH"
             value = "true"
           }
         }
