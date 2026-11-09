@@ -122,7 +122,15 @@ jobs:
           echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # ETAPA 1 - Criar EKS e Node Group
+      # ETAPA 1 - Criar EKS, Node Group e o access entry do github-actions
+      #
+      # O access entry do github-actions entra aqui (e não só na ETAPA 2, com o
+      # resto) de propósito: o EKS demora um pouco pra propagar uma access entry
+      # nova pro control plane depois que a API já respondeu "criado". Criando
+      # ele aqui, a criação do node group (que leva ~8-10min) cobre esse delay
+      # antes da ETAPA 2 usar essa identidade pra criar secret/service/deployment
+      # via kubernetes provider — sem isso dá "forbidden" quando o cluster nasce
+      # do zero (visto em cluster recriado depois de um destroy completo).
       # ============================================================
 
       - name: Criar EKS e Node Group - Terraform Apply
@@ -134,6 +142,8 @@ jobs:
             -input=false \
             -target=aws_eks_cluster.cluster \
             -target=aws_eks_node_group.node_group \
+            -target=aws_eks_access_entry.access_entry_github_actions \
+            -target=aws_eks_access_policy_association.access_entry_association_github_actions \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
             -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
 
