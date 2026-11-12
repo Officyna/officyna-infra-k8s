@@ -148,18 +148,17 @@ jobs:
             -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
 
       # ============================================================
-      # ETAPA 1.5 - Importar filas SQS que os serviços já criaram sozinhos
+      # ETAPA 1.5 - Importar filas SQS e tópicos SNS que já existem na AWS
       #
-      # os-service e billing-service ainda criam algumas dessas filas no
-      # próprio CommandLineRunner/resolver (SqsQueueInitializer,
-      # SqsQueueUrlResolver), antes do Terraform rodar. Se a fila já
-      # existe na AWS com um atributo diferente (ex: retention padrão em
-      # vez dos 14 dias que configuramos aqui), o aws_sqs_queue.create dá
-      # erro "QueueAlreadyExists". Importando pro state antes do apply, o
-      # Terraform faz update em vez de tentar criar de novo.
+      # Os serviços ou execuções anteriores podem já ter criado tópicos SNS
+      # ou filas SQS na AWS com atributos ou tags divergentes. Se o recurso
+      # já existe na AWS e não está no state com o identificador correto, o
+      # Terraform tenta criá-lo e falha com QueueAlreadyExists ou erro de Tags.
+      # Se o endereço no state apontar para uma fila/tópico antigo, removemos
+      # do state para reimportar com o ID correto e evitar destruição acidental.
       # ============================================================
 
-      - name: Importar filas SQS existentes (evita QueueAlreadyExists)
+      - name: Importar filas SQS e tópicos SNS existentes (evita QueueAlreadyExists e TopicAlreadyExists)
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
         run: |
@@ -169,23 +168,42 @@ jobs:
             local addr="$1"
             local queue_name="$2"
 
-            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
-              echo "$addr já está no state, pulando."
-              return
-            fi
-
             local queue_url
             queue_url=$(aws sqs get-queue-url --queue-name "$queue_name" --query QueueUrl --output text 2>/dev/null || true)
 
-            if [ -n "$queue_url" ] && [ "$queue_url" != "None" ]; then
-              echo "Fila '$queue_name' já existe na AWS mas não no state — importando $addr"
-              terraform import -input=false \
-                -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-                -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
-                "$addr" "$queue_url"
-            else
-              echo "Fila '$queue_name' ainda não existe, Terraform cria normalmente."
+            if [ -z "$queue_url" ] || [ "$queue_url" = "None" ]; then
+              echo "Fila SQS '$queue_name' não existe na AWS, Terraform cria normalmente."
+              return
             fi
+
+            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
+              local current_id
+              current_id=$(terraform state show -no-color "$addr" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+              if [ -n "$current_id" ] && [ "$current_id" = "$queue_url" ]; then
+                echo "$addr já está no state apontando para $queue_url, pulando."
+                return
+              else
+                echo "$addr está no state apontando para '$current_id', mas deveria ser '$queue_url'. Removendo do state para reimportar..."
+                terraform state rm "$addr" || true
+              fi
+            fi
+
+            for res in $(terraform state list 2>/dev/null | grep -E '^aws_sqs_queue\.' || true); do
+              if [ "$res" != "$addr" ]; then
+                local res_id
+                res_id=$(terraform state show -no-color "$res" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+                if [ -n "$res_id" ] && [ "$res_id" = "$queue_url" ]; then
+                  echo "Aviso: $res no state está associado à fila $queue_url. Removendo $res do state..."
+                  terraform state rm "$res" || true
+                fi
+              fi
+            done
+
+            echo "Fila SQS '$queue_name' já existe na AWS ($queue_url) — importando $addr"
+            terraform import -input=false \
+              -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+              -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+              "$addr" "$queue_url" || true
           }
 
           for nome in eventForDiagnostics eventDiagnosis eventDiagnosisCompleted eventGeneratePayment eventBugetGenerated; do
@@ -201,23 +219,42 @@ jobs:
             local addr="$1"
             local topic_name="$2"
 
-            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
-              echo "$addr já está no state, pulando."
-              return
-            fi
-
             local topic_arn
             topic_arn=$(aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${topic_name}')].TopicArn | [0]" --output text 2>/dev/null || true)
 
-            if [ -n "$topic_arn" ] && [ "$topic_arn" != "None" ]; then
-              echo "Tópico SNS '$topic_name' já existe na AWS mas não no state — importando $addr"
-              terraform import -input=false \
-                -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-                -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
-                "$addr" "$topic_arn"
-            else
-              echo "Tópico SNS '$topic_name' ainda não existe, Terraform cria normalmente."
+            if [ -z "$topic_arn" ] || [ "$topic_arn" = "None" ]; then
+              echo "Tópico SNS '$topic_name' não existe na AWS, Terraform cria normalmente."
+              return
             fi
+
+            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
+              local current_arn
+              current_arn=$(terraform state show -no-color "$addr" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+              if [ -n "$current_arn" ] && [ "$current_arn" = "$topic_arn" ]; then
+                echo "$addr já está no state apontando para $topic_arn, pulando."
+                return
+              else
+                echo "$addr está no state apontando para '$current_arn', mas deveria ser '$topic_arn'. Removendo do state para reimportar..."
+                terraform state rm "$addr" || true
+              fi
+            fi
+
+            for res in $(terraform state list 2>/dev/null | grep -E '^aws_sns_topic\.' || true); do
+              if [ "$res" != "$addr" ]; then
+                local res_arn
+                res_arn=$(terraform state show -no-color "$res" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+                if [ -n "$res_arn" ] && [ "$res_arn" = "$topic_arn" ]; then
+                  echo "Aviso: $res no state está associado ao tópico $topic_arn. Removendo $res do state..."
+                  terraform state rm "$res" || true
+                fi
+              fi
+            done
+
+            echo "Tópico SNS '$topic_name' já existe na AWS ($topic_arn) — importando $addr"
+            terraform import -input=false \
+              -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+              -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+              "$addr" "$topic_arn" || true
           }
 
           import_sns_if_needed "aws_sns_topic.topic_aprovacao" "topicAprovacao"
