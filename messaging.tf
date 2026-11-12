@@ -59,7 +59,7 @@ locals {
       gerenciado = true
     },
     {
-      nome       = "eventServiceOrderRecused"
+      nome       = "topicServiceOrderRecused"
       tipo       = "SNS"
       publica    = "os-service"
       consome    = "production-service + billing-service"
@@ -179,20 +179,24 @@ resource "aws_sns_topic_subscription" "topic_aprovacao_os_service_sub" {
 }
 
 # ============================================================
-# SNS eventServiceOrderRecused + fila assinante do billing-service
-#
-# billing-service já consome (ServiceOrderRecusedEventListener, dispara
-# estorno no Mercado Pago quando a OS é recusada/cancelada com pagamento
-# já aprovado). os-service ainda não publica — quando publicar, só
-# precisa dar CreateTopic/Publish nesse mesmo tópico, nada a mudar aqui.
-# Mesmo padrão fan-out do topicAprovacao: fila com o nome exato que o
-# consumer espera (aws.sqs.service-order-recused-queue), assinando o
-# tópico.
+# SNS topicServiceOrderRecused (padrão Fan-out da recusa)
+# Filas assinantes:
+# - production-service consome via "eventServiceOrderRecused"
+# - billing-service consome via "eventServiceOrderRecusedPayment"
 # ============================================================
 
-resource "aws_sns_topic" "event_service_order_recused" {
-  name              = "eventServiceOrderRecused"
+resource "aws_sns_topic" "topic_service_order_recused" {
+  name              = "topicServiceOrderRecused"
   kms_master_key_id = "alias/aws/sns"
+
+  tags = {
+    Name    = "topicServiceOrderRecused"
+    Project = "officyna"
+  }
+}
+
+resource "aws_sqs_queue" "event_service_order_recused_production_service" {
+  name = "eventServiceOrderRecused"
 
   tags = {
     Name    = "eventServiceOrderRecused"
@@ -200,11 +204,34 @@ resource "aws_sns_topic" "event_service_order_recused" {
   }
 }
 
+resource "aws_sqs_queue_policy" "event_service_order_recused_production_service_policy" {
+  queue_url = aws_sqs_queue.event_service_order_recused_production_service.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "sns.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.event_service_order_recused_production_service.arn
+      Condition = {
+        ArnEquals = { "aws:SourceArn" = aws_sns_topic.topic_service_order_recused.arn }
+      }
+    }]
+  })
+}
+
+resource "aws_sns_topic_subscription" "event_service_order_recused_production_service_sub" {
+  topic_arn = aws_sns_topic.topic_service_order_recused.arn
+  protocol  = "sqs"
+  endpoint  = aws_sqs_queue.event_service_order_recused_production_service.arn
+}
+
 resource "aws_sqs_queue" "event_service_order_recused_billing_service" {
-  name = "eventServiceOrderRecused"
+  name = "eventServiceOrderRecusedPayment"
 
   tags = {
-    Name    = "eventServiceOrderRecused"
+    Name    = "eventServiceOrderRecusedPayment"
     Project = "officyna"
   }
 }
@@ -220,14 +247,14 @@ resource "aws_sqs_queue_policy" "event_service_order_recused_billing_service_pol
       Action    = "sqs:SendMessage"
       Resource  = aws_sqs_queue.event_service_order_recused_billing_service.arn
       Condition = {
-        ArnEquals = { "aws:SourceArn" = aws_sns_topic.event_service_order_recused.arn }
+        ArnEquals = { "aws:SourceArn" = aws_sns_topic.topic_service_order_recused.arn }
       }
     }]
   })
 }
 
 resource "aws_sns_topic_subscription" "event_service_order_recused_billing_service_sub" {
-  topic_arn = aws_sns_topic.event_service_order_recused.arn
+  topic_arn = aws_sns_topic.topic_service_order_recused.arn
   protocol  = "sqs"
   endpoint  = aws_sqs_queue.event_service_order_recused_billing_service.arn
 }
