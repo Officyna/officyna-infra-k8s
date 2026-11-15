@@ -45,7 +45,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -66,17 +66,22 @@ jobs:
         run: |
           VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
           SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+          DOCDB_ENDPOINT=$(aws ssm get-parameter --name "/officyna/db/endpoint" --query "Parameter.Value" --output text 2>/dev/null || true)
 
           echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+          echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       - name: Terraform Plan
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
         run: |
           terraform plan -no-color -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+            -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}"
 
   apply:
     name: Terraform Apply
@@ -95,7 +100,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -110,12 +115,22 @@ jobs:
         run: |
           VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
           SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+          DOCDB_ENDPOINT=$(aws ssm get-parameter --name "/officyna/db/endpoint" --query "Parameter.Value" --output text 2>/dev/null || true)
 
           echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+          echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # ETAPA 1 - Criar EKS e Node Group
+      # ETAPA 1 - Criar EKS, Node Group e o access entry do github-actions
+      #
+      # O access entry do github-actions entra aqui (e não só na ETAPA 2, com o
+      # resto) de propósito: o EKS demora um pouco pra propagar uma access entry
+      # nova pro control plane depois que a API já respondeu "criado". Criando
+      # ele aqui, a criação do node group (que leva ~8-10min) cobre esse delay
+      # antes da ETAPA 2 usar essa identidade pra criar secret/service/deployment
+      # via kubernetes provider — sem isso dá "forbidden" quando o cluster nasce
+      # do zero (visto em cluster recriado depois de um destroy completo).
       # ============================================================
 
       - name: Criar EKS e Node Group - Terraform Apply
@@ -127,8 +142,173 @@ jobs:
             -input=false \
             -target=aws_eks_cluster.cluster \
             -target=aws_eks_node_group.node_group \
+            -target=aws_eks_access_entry.access_entry_github_actions \
+            -target=aws_eks_access_policy_association.access_entry_association_github_actions \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
             -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+
+      # ============================================================
+      # ETAPA 1.5 - Importar filas SQS e tópicos SNS que já existem na AWS
+      #
+      # Os serviços ou execuções anteriores podem já ter criado tópicos SNS
+      # ou filas SQS na AWS com atributos ou tags divergentes. Se o recurso
+      # já existe na AWS e não está no state com o identificador correto, o
+      # Terraform tenta criá-lo e falha com QueueAlreadyExists ou erro de Tags.
+      # Se o endereço no state apontar para uma fila/tópico antigo, removemos
+      # do state para reimportar com o ID correto e evitar destruição acidental.
+      # ============================================================
+
+      - name: Importar filas SQS e tópicos SNS existentes (evita QueueAlreadyExists e TopicAlreadyExists)
+        env:
+          TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+        run: |
+          set -euo pipefail
+
+          import_if_needed() {
+            local addr="$1"
+            local queue_name="$2"
+
+            local queue_url
+            queue_url=$(aws sqs get-queue-url --queue-name "$queue_name" --query QueueUrl --output text 2>/dev/null || true)
+
+            if [ -z "$queue_url" ] || [ "$queue_url" = "None" ]; then
+              echo "Fila SQS '$queue_name' não existe na AWS, Terraform cria normalmente."
+              return
+            fi
+
+            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
+              local current_id
+              current_id=$(terraform state show -no-color "$addr" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+              if [ -n "$current_id" ] && [ "$current_id" = "$queue_url" ]; then
+                echo "$addr já está no state apontando para $queue_url, pulando."
+                return
+              else
+                echo "$addr está no state apontando para '$current_id', mas deveria ser '$queue_url'. Removendo do state para reimportar..."
+                terraform state rm "$addr" || true
+              fi
+            fi
+
+            for res in $(terraform state list 2>/dev/null | grep -E '^aws_sqs_queue\.' || true); do
+              if [ "$res" != "$addr" ]; then
+                local res_id
+                res_id=$(terraform state show -no-color "$res" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+                if [ -n "$res_id" ] && [ "$res_id" = "$queue_url" ]; then
+                  echo "Aviso: $res no state está associado à fila $queue_url. Removendo $res do state..."
+                  terraform state rm "$res" || true
+                fi
+              fi
+            done
+
+            echo "Fila SQS '$queue_name' já existe na AWS ($queue_url) — importando $addr"
+            terraform import -input=false \
+              -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+              -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+              "$addr" "$queue_url" || true
+          }
+
+          for nome in eventForDiagnostics eventDiagnosis eventDiagnosisCompleted eventGeneratePayment eventBugetGenerated; do
+            import_if_needed "aws_sqs_queue.queue[\"$nome\"]" "$nome"
+            import_if_needed "aws_sqs_queue.dlq[\"$nome\"]" "${nome}Dlq"
+          done
+
+          import_if_needed "aws_sqs_queue.topic_aprovacao_os_service" "topicAprovacao"
+          import_if_needed "aws_sqs_queue.event_service_order_recused_production_service" "eventServiceOrderRecused"
+          import_if_needed "aws_sqs_queue.event_service_order_recused_billing_service" "eventServiceOrderRecusedPayment"
+
+          import_sns_if_needed() {
+            local addr="$1"
+            local topic_name="$2"
+
+            local topic_arn
+            topic_arn=$(aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${topic_name}')].TopicArn | [0]" --output text 2>/dev/null || true)
+
+            if [ -z "$topic_arn" ] || [ "$topic_arn" = "None" ]; then
+              echo "Tópico SNS '$topic_name' não existe na AWS, Terraform cria normalmente."
+              return
+            fi
+
+            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
+              local current_arn
+              current_arn=$(terraform state show -no-color "$addr" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+              if [ -n "$current_arn" ] && [ "$current_arn" = "$topic_arn" ]; then
+                echo "$addr já está no state apontando para $topic_arn, pulando."
+                return
+              else
+                echo "$addr está no state apontando para '$current_arn', mas deveria ser '$topic_arn'. Removendo do state para reimportar..."
+                terraform state rm "$addr" || true
+              fi
+            fi
+
+            for res in $(terraform state list 2>/dev/null | grep -E '^aws_sns_topic\.' || true); do
+              if [ "$res" != "$addr" ]; then
+                local res_arn
+                res_arn=$(terraform state show -no-color "$res" 2>/dev/null | grep -E '^\s*id\s*=' | head -n1 | awk '{print $3}' | tr -d '"' || true)
+                if [ -n "$res_arn" ] && [ "$res_arn" = "$topic_arn" ]; then
+                  echo "Aviso: $res no state está associado ao tópico $topic_arn. Removendo $res do state..."
+                  terraform state rm "$res" || true
+                fi
+              fi
+            done
+
+            echo "Tópico SNS '$topic_name' já existe na AWS ($topic_arn) — importando $addr"
+            terraform import -input=false \
+              -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+              -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+              "$addr" "$topic_arn" || true
+          }
+
+          import_sns_if_needed "aws_sns_topic.topic_aprovacao" "topicAprovacao"
+          import_sns_if_needed "aws_sns_topic.topic_service_order_recused" "topicServiceOrderRecused"
+          import_sns_if_needed "aws_sns_topic.topic_rejeicao" "topicRejeicao"
+
+      # ============================================================
+      # ETAPA 1.6 - Importar recursos do mongo-express ja criados no cluster
+      #
+      # Se um apply anterior for cancelado no meio (ex: enquanto o
+      # kubernetes_deployment fica esperando o rollout ficar saudavel), os
+      # objetos podem ja existir de verdade no cluster sem estar no state do
+      # Terraform. Sem isso o apply seguinte tenta criar de novo e falha com
+      # "already exists". Se os recursos ainda nao existirem (primeira vez
+      # ou variaveis vazias), o kubectl get falha e o Terraform cria normal.
+      # ============================================================
+
+      - name: Importar recursos do mongo-express existentes (evita already exists)
+        env:
+          TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name eks-officyna-service --region "${{ vars.AWS_REGION }}"
+
+          import_if_needed() {
+            local addr="$1"
+            local kind="$2"
+            local name="$3"
+
+            if terraform state list 2>/dev/null | grep -qxF "$addr"; then
+              echo "$addr já está no state, pulando."
+              return
+            fi
+
+            if kubectl get "$kind" "$name" -n default >/dev/null 2>&1; then
+              echo "$kind/$name já existe no cluster mas não no state — importando $addr"
+              terraform import -input=false \
+                -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
+                -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+                -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}" \
+                "$addr" "default/$name"
+            else
+              echo "$kind/$name ainda não existe, Terraform cria normalmente."
+            fi
+          }
+
+          for db in officyna officyna_supply officyna_labor officyna_snapshot officyna-users; do
+            k8s_name="mongo-express-${db//_/-}"
+            import_if_needed "kubernetes_secret.mongo_express[\"$db\"]" secret "${k8s_name}-secret"
+            import_if_needed "kubernetes_deployment.mongo_express[\"$db\"]" deployment "$k8s_name"
+            import_if_needed "kubernetes_service.mongo_express[\"$db\"]" service "$k8s_name"
+          done
 
       # ============================================================
       # ETAPA 2 - Instalar New Relic e finalizar Terraform
@@ -137,12 +317,102 @@ jobs:
       - name: Instalar New Relic Kubernetes Monitoring - Terraform Apply
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
         run: |
           terraform apply \
             -auto-approve \
             -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+            -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}"
+
+      # ============================================================
+      # ETAPA 2.5 - Mostrar as URLs de cada mongo-express (um por banco)
+      #
+      # O LoadBalancer da AWS demora alguns segundos pra ganhar hostname depois
+      # do apply, por isso espera em rodadas em vez de checar só uma vez.
+      # ============================================================
+
+      - name: Mostrar URLs do mongo-express
+        run: |
+          set -euo pipefail
+          echo "## 🗄️ Mongo Express (um por banco)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Banco | URL |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          databases="officyna officyna_supply officyna_labor officyna_snapshot officyna-users"
+          pendentes="$databases"
+
+          for round in $(seq 1 18); do
+            ainda_pendentes=""
+            for db in $pendentes; do
+              svc="mongo-express-${db//_/-}"
+
+              if ! kubectl get service "$svc" -n default >/dev/null 2>&1; then
+                continue
+              fi
+
+              hostname=$(kubectl get service "$svc" -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+              if [ -n "$hostname" ]; then
+                echo "| $db | http://$hostname |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                ainda_pendentes="$ainda_pendentes $db"
+              fi
+            done
+
+            pendentes="$ainda_pendentes"
+            [ -z "$pendentes" ] && break
+            sleep 10
+          done
+
+          for db in $pendentes; do
+            svc="mongo-express-${db//_/-}"
+            if kubectl get service "$svc" -n default >/dev/null 2>&1; then
+              echo "| $db | ⏳ LoadBalancer ainda provisionando, verifique com \`kubectl get svc $svc -n default\` |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      # ============================================================
+      # ETAPA 3 - Logar o mapa de mensageria da saga (messaging.tf)
+      # ============================================================
+
+      - name: Logar status das filas/tópicos da saga
+        run: |
+          set -euo pipefail
+          echo "## 📬 Mapa de mensageria" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Evento/Tópico | Tipo | Publica | Consome | DLQ | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          terraform output -json saga_map | jq -c '.[]' | while read -r item; do
+            nome=$(echo "$item" | jq -r '.nome')
+            tipo=$(echo "$item" | jq -r '.tipo')
+            publica=$(echo "$item" | jq -r '.publica')
+            consome=$(echo "$item" | jq -r '.consome')
+            dlq=$(echo "$item" | jq -r '.dlq')
+            gerenciado=$(echo "$item" | jq -r '.gerenciado')
+
+            if [ "$gerenciado" != "true" ]; then
+              status="⏸️ não criado (fase futura da saga)"
+            elif [ "$tipo" = "SNS" ]; then
+              if aws sns list-topics --query "Topics[?ends_with(TopicArn, ':${nome}')]" --output text | grep -q .; then
+                status="✅ existe"
+              else
+                status="❌ não encontrado"
+              fi
+            else
+              if aws sqs get-queue-url --queue-name "$nome" >/dev/null 2>&1; then
+                status="✅ existe"
+              else
+                status="❌ não encontrado"
+              fi
+            fi
+
+            echo "| $nome | $tipo | $publica | $consome | $dlq | $status |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$nome ($tipo): $status"
+          done
 
   destroy:
     name: Terraform Destroy (manual)
@@ -161,7 +431,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -176,14 +446,23 @@ jobs:
         run: |
           VPC_ID=$(aws ssm get-parameter --name "/officyna/network/vpc_id" --query "Parameter.Value" --output text)
           SUBNET_IDS=$(aws ssm get-parameter --name "/officyna/network/subnet_ids" --query "Parameter.Value" --output text)
+          DOCDB_ENDPOINT=$(aws ssm get-parameter --name "/officyna/db/endpoint" --query "Parameter.Value" --output text 2>/dev/null || true)
 
           echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
           echo "subnet_ids=$SUBNET_IDS" >> "$GITHUB_OUTPUT"
+          echo "docdb_endpoint=$DOCDB_ENDPOINT" >> "$GITHUB_OUTPUT"
+
+      - name: Configurar kubeconfig do cluster EKS
+        run: |
+          aws eks update-kubeconfig --name eks-officyna-service --region "${{ vars.AWS_REGION }}" || true
 
       - name: Terraform Destroy
         env:
           TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          TF_VAR_docdb_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_mongo_express_basicauth_password: ${{ secrets.MONGO_EXPRESS_BASICAUTH_PASSWORD }}
         run: |
           terraform destroy -auto-approve -input=false \
             -var="vpc_id=${{ steps.network.outputs.vpc_id }}" \
-            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}'
+            -var='subnet_ids=${{ steps.network.outputs.subnet_ids }}' \
+            -var="docdb_endpoint=${{ steps.network.outputs.docdb_endpoint }}"

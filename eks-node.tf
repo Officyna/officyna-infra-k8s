@@ -10,7 +10,7 @@ resource "aws_eks_node_group" "node_group" {
   release_version = "1.35.7-20260903"
 
   scaling_config {
-    desired_size = 1
+    desired_size = 2
     max_size     = 2
     min_size     = 1
   }

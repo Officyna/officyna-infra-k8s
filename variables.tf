@@ -43,3 +43,23 @@ variable "newrelic_license_key" {
   type        = string
   sensitive   = true
 }
+
+variable "docdb_endpoint" {
+  description = "Endpoint do cluster DocumentDB (vem do SSM /officyna/db/endpoint, publicado pelo infra-db)"
+  type        = string
+  default     = ""
+}
+
+variable "docdb_password" {
+  description = "Senha do usuário do DocumentDB (mesmo secret DB_PASSWORD do infra-db) — usada só pro mongo-express"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "mongo_express_basicauth_password" {
+  description = "Senha de acesso única e compartilhada pro mongo-express (interface web de consulta ao DocumentDB)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

@@ -101,6 +101,29 @@ resource "aws_eks_access_policy_association" "access_entry_association" {
   access_scope {
     type = "cluster"
   }
+
+  # Sem referência de atributo entre os dois recursos, o Terraform não sabe que o access entry
+  # precisa existir primeiro — sem isso, às vezes tenta associar a política em paralelo com a
+  # criação do entry e falha com ResourceNotFoundException.
+  depends_on = [aws_eks_access_entry.access_entry]
+}
+
+resource "aws_eks_access_entry" "access_entry_stevam" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  principal_arn = data.aws_iam_user.stevam_user.arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "access_entry_association_stevam" {
+  cluster_name  = aws_eks_cluster.cluster.name
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+  principal_arn = data.aws_iam_user.stevam_user.arn
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.access_entry_stevam]
 }
 
 # Access entry para o usuário usado pelo GitHub Actions (roda kubectl no
@@ -119,4 +142,6 @@ resource "aws_eks_access_policy_association" "access_entry_association_github_ac
   access_scope {
     type = "cluster"
   }
+
+  depends_on = [aws_eks_access_entry.access_entry_github_actions]
 }
